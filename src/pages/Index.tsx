@@ -1,66 +1,22 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Icon from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  fetchWorkers, createWorker, deleteWorker,
+  fetchOrders, createOrder, updateOrderStatus, deleteOrder,
+  fetchParts, createPart, adjustPartStock, deletePart,
+  type Worker, type Order, type Part,
+} from "@/lib/api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type OrderStatus = "new" | "progress" | "done";
 type Tab = "dashboard" | "orders" | "parts" | "workers" | "stats";
 
-interface Worker {
-  id: number;
-  name: string;
-  phone: string;
-  active: boolean;
-}
-
-interface Order {
-  id: number;
-  title: string;
-  workerId: number;
-  status: OrderStatus;
-  amount: number;
-  date: string;
-  description: string;
-}
-
-interface Part {
-  id: number;
-  name: string;
-  quantity: number;
-  unit: string;
-  minStock: number;
-}
-
-// ─── Initial data ──────────────────────────────────────────────────────────────
-
-const INIT_WORKERS: Worker[] = [
-  { id: 1, name: "Алексей Воронов", phone: "+7 (999) 123-45-67", active: true },
-  { id: 2, name: "Дмитрий Козлов", phone: "+7 (999) 234-56-78", active: true },
-  { id: 3, name: "Иван Петров", phone: "+7 (999) 345-67-89", active: true },
-];
-
-const INIT_ORDERS: Order[] = [
-  { id: 1, title: "Ремонт двигателя Toyota Camry", workerId: 1, status: "done", amount: 15000, date: "2026-06-05", description: "Замена прокладки ГБЦ" },
-  { id: 2, title: "Замена тормозных колодок Honda CR-V", workerId: 2, status: "progress", amount: 4500, date: "2026-06-06", description: "Передние и задние колодки" },
-  { id: 3, title: "Диагностика BMW 5 Series", workerId: 3, status: "new", amount: 2000, date: "2026-06-07", description: "Ошибки ЭБУ, проверка подвески" },
-  { id: 4, title: "Замена масла Kia Sportage", workerId: 1, status: "done", amount: 1800, date: "2026-06-04", description: "Масло + фильтр" },
-  { id: 5, title: "Ремонт КПП Nissan Qashqai", workerId: 2, status: "done", amount: 22000, date: "2026-06-03", description: "Замена сцепления" },
-];
-
-const INIT_PARTS: Part[] = [
-  { id: 1, name: "Моторное масло 5W-30", quantity: 24, unit: "л", minStock: 10 },
-  { id: 2, name: "Тормозные колодки передние", quantity: 3, unit: "компл.", minStock: 5 },
-  { id: 3, name: "Воздушный фильтр", quantity: 12, unit: "шт", minStock: 8 },
-  { id: 4, name: "Свечи зажигания NGK", quantity: 2, unit: "компл.", minStock: 4 },
-  { id: 5, name: "Антифриз G12", quantity: 18, unit: "л", minStock: 10 },
-  { id: 6, name: "Тормозная жидкость DOT-4", quantity: 6, unit: "л", minStock: 4 },
-];
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const STATUS_LABELS: Record<OrderStatus, string> = { new: "Новый", progress: "В работе", done: "Готов" };
 const STATUS_CLASSES: Record<OrderStatus, string> = { new: "status-new", progress: "status-progress", done: "status-done" };
@@ -89,13 +45,36 @@ function StatCard({ label, value, sub, icon, accentColor }: {
   );
 }
 
+// ─── Skeleton row ─────────────────────────────────────────────────────────────
+
+function SkeletonRows({ cols, rows = 4 }: { cols: number; rows?: number }) {
+  return (
+    <>
+      {Array.from({ length: rows }).map((_, i) => (
+        <tr key={i}>
+          {Array.from({ length: cols }).map((__, j) => (
+            <td key={j} className="px-4 py-3">
+              <div className="h-4 rounded animate-pulse" style={{ background: "hsl(var(--muted))", width: j === 0 ? "70%" : "50%" }} />
+            </td>
+          ))}
+        </tr>
+      ))}
+    </>
+  );
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 export default function Index() {
   const [tab, setTab] = useState<Tab>("dashboard");
-  const [workers, setWorkers] = useState<Worker[]>(INIT_WORKERS);
-  const [orders, setOrders] = useState<Order[]>(INIT_ORDERS);
-  const [parts, setParts] = useState<Part[]>(INIT_PARTS);
+
+  const [workers, setWorkers] = useState<Worker[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [parts, setParts] = useState<Part[]>([]);
+
+  const [loadingWorkers, setLoadingWorkers] = useState(true);
+  const [loadingOrders, setLoadingOrders] = useState(true);
+  const [loadingParts, setLoadingParts] = useState(true);
 
   const [addOrderOpen, setAddOrderOpen] = useState(false);
   const [addPartOpen, setAddPartOpen] = useState(false);
@@ -104,10 +83,34 @@ export default function Index() {
   const [newOrder, setNewOrder] = useState({ title: "", workerId: "", amount: "", description: "" });
   const [newPart, setNewPart] = useState({ name: "", quantity: "", unit: "шт", minStock: "" });
   const [newWorker, setNewWorker] = useState({ name: "", phone: "" });
+  const [saving, setSaving] = useState(false);
 
   const [statusFilter, setStatusFilter] = useState<OrderStatus | "all">("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+
+  // ── Load data ──────────────────────────────────────────────────────────────
+
+  const loadWorkers = useCallback(async () => {
+    setLoadingWorkers(true);
+    try { setWorkers(await fetchWorkers()); } finally { setLoadingWorkers(false); }
+  }, []);
+
+  const loadOrders = useCallback(async () => {
+    setLoadingOrders(true);
+    try { setOrders(await fetchOrders()); } finally { setLoadingOrders(false); }
+  }, []);
+
+  const loadParts = useCallback(async () => {
+    setLoadingParts(true);
+    try { setParts(await fetchParts()); } finally { setLoadingParts(false); }
+  }, []);
+
+  useEffect(() => {
+    loadWorkers();
+    loadOrders();
+    loadParts();
+  }, [loadWorkers, loadOrders, loadParts]);
 
   // ── Computed ──────────────────────────────────────────────────────────────
 
@@ -131,32 +134,65 @@ export default function Index() {
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
-  const submitOrder = () => {
+  const submitOrder = async () => {
     if (!newOrder.title || !newOrder.workerId || !newOrder.amount) return;
-    setOrders(p => [...p, { id: Date.now(), title: newOrder.title, workerId: Number(newOrder.workerId), status: "new", amount: Number(newOrder.amount), date: todayStr(), description: newOrder.description }]);
-    setNewOrder({ title: "", workerId: "", amount: "", description: "" });
-    setAddOrderOpen(false);
+    setSaving(true);
+    try {
+      await createOrder({ title: newOrder.title, workerId: Number(newOrder.workerId), amount: Number(newOrder.amount), description: newOrder.description, date: todayStr() });
+      await loadOrders();
+      setNewOrder({ title: "", workerId: "", amount: "", description: "" });
+      setAddOrderOpen(false);
+    } finally { setSaving(false); }
   };
 
-  const submitPart = () => {
+  const submitPart = async () => {
     if (!newPart.name || !newPart.quantity) return;
-    setParts(p => [...p, { id: Date.now(), name: newPart.name, quantity: Number(newPart.quantity), unit: newPart.unit, minStock: Number(newPart.minStock) || 5 }]);
-    setNewPart({ name: "", quantity: "", unit: "шт", minStock: "" });
-    setAddPartOpen(false);
+    setSaving(true);
+    try {
+      await createPart({ name: newPart.name, quantity: Number(newPart.quantity), unit: newPart.unit, minStock: Number(newPart.minStock) || 5 });
+      await loadParts();
+      setNewPart({ name: "", quantity: "", unit: "шт", minStock: "" });
+      setAddPartOpen(false);
+    } finally { setSaving(false); }
   };
 
-  const submitWorker = () => {
+  const submitWorker = async () => {
     if (!newWorker.name) return;
-    setWorkers(p => [...p, { id: Date.now(), ...newWorker, active: true }]);
-    setNewWorker({ name: "", phone: "" });
-    setAddWorkerOpen(false);
+    setSaving(true);
+    try {
+      await createWorker(newWorker.name, newWorker.phone);
+      await loadWorkers();
+      setNewWorker({ name: "", phone: "" });
+      setAddWorkerOpen(false);
+    } finally { setSaving(false); }
   };
 
-  const cycleStatus = (id: number) => setOrders(p => p.map(o => o.id === id ? { ...o, status: STATUS_NEXT[o.status] } : o));
-  const deleteOrder = (id: number) => setOrders(p => p.filter(o => o.id !== id));
-  const deletePart = (id: number) => setParts(p => p.filter(x => x.id !== id));
-  const deleteWorker = (id: number) => setWorkers(p => p.filter(w => w.id !== id));
-  const adjustStock = (id: number, delta: number) => setParts(p => p.map(x => x.id === id ? { ...x, quantity: Math.max(0, x.quantity + delta) } : x));
+  const handleCycleStatus = async (order: Order) => {
+    const nextStatus = STATUS_NEXT[order.status];
+    setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: nextStatus } : o));
+    await updateOrderStatus(order.id, nextStatus);
+  };
+
+  const handleDeleteOrder = async (id: number) => {
+    setOrders(prev => prev.filter(o => o.id !== id));
+    await deleteOrder(id);
+  };
+
+  const handleDeletePart = async (id: number) => {
+    setParts(prev => prev.filter(p => p.id !== id));
+    await deletePart(id);
+  };
+
+  const handleDeleteWorker = async (id: number) => {
+    setWorkers(prev => prev.filter(w => w.id !== id));
+    await deleteWorker(id);
+  };
+
+  const handleAdjustStock = async (id: number, delta: number) => {
+    setParts(prev => prev.map(p => p.id === id ? { ...p, quantity: Math.max(0, p.quantity + delta) } : p));
+    const result = await adjustPartStock(id, delta);
+    setParts(prev => prev.map(p => p.id === id ? { ...p, quantity: result.quantity } : p));
+  };
 
   // ── Nav ───────────────────────────────────────────────────────────────────
 
@@ -248,19 +284,24 @@ export default function Index() {
                   <span className="text-sm font-semibold">Последние заказы</span>
                   <button className="text-xs" style={{ color: "hsl(var(--primary))" }} onClick={() => setTab("orders")}>Все заказы →</button>
                 </div>
-                {orders.slice().reverse().slice(0, 5).map(order => {
-                  const worker = workers.find(w => w.id === order.workerId);
-                  return (
-                    <div key={order.id} className="flex items-center gap-3 px-4 py-3 border-b last:border-b-0" style={{ borderColor: "hsl(var(--border))" }}>
-                      <span className={`text-xs px-2 py-0.5 rounded border font-medium ${STATUS_CLASSES[order.status]}`}>{STATUS_LABELS[order.status]}</span>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate">{order.title}</div>
-                        <div className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>{worker?.name} · {order.date}</div>
-                      </div>
-                      <div className="font-mono text-sm font-semibold" style={{ color: order.status === "done" ? "hsl(142 71% 45%)" : "hsl(var(--muted-foreground))" }}>{fmt(order.amount)}</div>
+                {loadingOrders ? (
+                  <div className="px-4 py-8 text-center text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>
+                    <div className="inline-block w-4 h-4 rounded-full border-2 border-t-transparent animate-spin mr-2" style={{ borderColor: "hsl(var(--primary))", borderTopColor: "transparent" }} />
+                    Загрузка...
+                  </div>
+                ) : orders.slice(0, 5).map(order => (
+                  <div key={order.id} className="flex items-center gap-3 px-4 py-3 border-b last:border-b-0" style={{ borderColor: "hsl(var(--border))" }}>
+                    <span className={`text-xs px-2 py-0.5 rounded border font-medium ${STATUS_CLASSES[order.status]}`}>{STATUS_LABELS[order.status]}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">{order.title}</div>
+                      <div className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>{order.workerName} · {order.date}</div>
                     </div>
-                  );
-                })}
+                    <div className="font-mono text-sm font-semibold" style={{ color: order.status === "done" ? "hsl(142 71% 45%)" : "hsl(var(--muted-foreground))" }}>{fmt(order.amount)}</div>
+                  </div>
+                ))}
+                {!loadingOrders && orders.length === 0 && (
+                  <div className="px-4 py-8 text-center text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>Заказов пока нет</div>
+                )}
               </div>
 
               {lowStock > 0 && (
@@ -312,37 +353,34 @@ export default function Index() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredOrders.length === 0 ? (
+                    {loadingOrders ? <SkeletonRows cols={6} /> : filteredOrders.length === 0 ? (
                       <tr><td colSpan={6} className="text-center py-12 text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>Заказы не найдены</td></tr>
-                    ) : filteredOrders.map(order => {
-                      const worker = workers.find(w => w.id === order.workerId);
-                      return (
-                        <tr key={order.id} className="border-b last:border-b-0 hover:bg-white/[0.02] transition-colors" style={{ borderColor: "hsl(var(--border))" }}>
-                          <td className="px-4 py-3">
-                            <div className="font-medium">{order.title}</div>
-                            {order.description && <div className="text-xs mt-0.5" style={{ color: "hsl(var(--muted-foreground))" }}>{order.description}</div>}
-                          </td>
-                          <td className="px-4 py-3 text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>{worker?.name || "—"}</td>
-                          <td className="px-4 py-3">
-                            <button onClick={() => cycleStatus(order.id)}
-                              className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded border font-medium transition-all hover:opacity-80 ${STATUS_CLASSES[order.status]}`}
-                              title="Нажмите для смены статуса">
-                              <Icon name={STATUS_ICONS[order.status]} size={11} />{STATUS_LABELS[order.status]}
-                            </button>
-                          </td>
-                          <td className="px-4 py-3 text-right font-mono font-semibold" style={{ color: order.status === "done" ? "hsl(142 71% 45%)" : "hsl(var(--foreground))" }}>{fmt(order.amount)}</td>
-                          <td className="px-4 py-3 font-mono text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>{order.date}</td>
-                          <td className="px-4 py-3">
-                            <button onClick={() => deleteOrder(order.id)} className="opacity-40 hover:opacity-100 transition-opacity">
-                              <Icon name="Trash2" size={14} style={{ color: "hsl(var(--destructive))" }} />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    ) : filteredOrders.map(order => (
+                      <tr key={order.id} className="border-b last:border-b-0 hover:bg-white/[0.02] transition-colors" style={{ borderColor: "hsl(var(--border))" }}>
+                        <td className="px-4 py-3">
+                          <div className="font-medium">{order.title}</div>
+                          {order.description && <div className="text-xs mt-0.5" style={{ color: "hsl(var(--muted-foreground))" }}>{order.description}</div>}
+                        </td>
+                        <td className="px-4 py-3 text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>{order.workerName || "—"}</td>
+                        <td className="px-4 py-3">
+                          <button onClick={() => handleCycleStatus(order)}
+                            className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded border font-medium transition-all hover:opacity-80 ${STATUS_CLASSES[order.status]}`}
+                            title="Нажмите для смены статуса">
+                            <Icon name={STATUS_ICONS[order.status]} size={11} />{STATUS_LABELS[order.status]}
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono font-semibold" style={{ color: order.status === "done" ? "hsl(142 71% 45%)" : "hsl(var(--foreground))" }}>{fmt(order.amount)}</td>
+                        <td className="px-4 py-3 font-mono text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>{order.date}</td>
+                        <td className="px-4 py-3">
+                          <button onClick={() => handleDeleteOrder(order.id)} className="opacity-40 hover:opacity-100 transition-opacity">
+                            <Icon name="Trash2" size={14} style={{ color: "hsl(var(--destructive))" }} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
-                {filteredOrders.length > 0 && (
+                {!loadingOrders && filteredOrders.length > 0 && (
                   <div className="flex items-center justify-between px-4 py-3 border-t text-xs font-mono" style={{ borderColor: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }}>
                     <span>{filteredOrders.length} заказов</span>
                     <span>Готовых: <span style={{ color: "hsl(142 71% 45%)" }} className="font-semibold">{fmt(filteredOrders.filter(o => o.status === "done").reduce((s, o) => s + o.amount, 0))}</span></span>
@@ -365,7 +403,7 @@ export default function Index() {
                     </tr>
                   </thead>
                   <tbody>
-                    {parts.map(part => {
+                    {loadingParts ? <SkeletonRows cols={5} /> : parts.map(part => {
                       const low = part.quantity <= part.minStock;
                       return (
                         <tr key={part.id} className="border-b last:border-b-0 hover:bg-white/[0.02] transition-colors" style={{ borderColor: "hsl(var(--border))" }}>
@@ -379,12 +417,12 @@ export default function Index() {
                           <td className="px-4 py-3 text-center font-mono text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>{part.minStock} {part.unit}</td>
                           <td className="px-4 py-3">
                             <div className="flex items-center justify-center gap-2">
-                              <button onClick={() => adjustStock(part.id, -1)} className="w-7 h-7 rounded border flex items-center justify-center text-xs font-bold transition-all hover:opacity-80" style={{ borderColor: "hsl(var(--border))", color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}>−</button>
-                              <button onClick={() => adjustStock(part.id, 1)} className="w-7 h-7 rounded border flex items-center justify-center text-xs font-bold transition-all hover:opacity-80" style={{ borderColor: "hsl(var(--primary) / 0.4)", color: "hsl(var(--primary))", background: "hsl(var(--primary) / 0.1)" }}>+</button>
+                              <button onClick={() => handleAdjustStock(part.id, -1)} className="w-7 h-7 rounded border flex items-center justify-center text-xs font-bold transition-all hover:opacity-80" style={{ borderColor: "hsl(var(--border))", color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}>−</button>
+                              <button onClick={() => handleAdjustStock(part.id, 1)} className="w-7 h-7 rounded border flex items-center justify-center text-xs font-bold transition-all hover:opacity-80" style={{ borderColor: "hsl(var(--primary) / 0.4)", color: "hsl(var(--primary))", background: "hsl(var(--primary) / 0.1)" }}>+</button>
                             </div>
                           </td>
                           <td className="px-4 py-3">
-                            <button onClick={() => deletePart(part.id)} className="opacity-40 hover:opacity-100 transition-opacity">
+                            <button onClick={() => handleDeletePart(part.id)} className="opacity-40 hover:opacity-100 transition-opacity">
                               <Icon name="Trash2" size={14} style={{ color: "hsl(var(--destructive))" }} />
                             </button>
                           </td>
@@ -403,13 +441,18 @@ export default function Index() {
           {/* ══ WORKERS ══ */}
           {tab === "workers" && (
             <div className="animate-fade-in space-y-3">
-              {workers.map(worker => {
+              {loadingWorkers ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="rounded-lg border p-4 animate-pulse" style={{ borderColor: "hsl(var(--border))", background: "hsl(var(--card))" }}>
+                    <div className="h-4 rounded w-1/3" style={{ background: "hsl(var(--muted))" }} />
+                  </div>
+                ))
+              ) : workers.map(worker => {
                 const s = workerStats(worker.id);
                 return (
                   <div key={worker.id} className="rounded-lg border overflow-hidden" style={{ borderColor: "hsl(var(--border))", background: "hsl(var(--card))" }}>
                     <div className="flex items-center gap-4 px-4 py-4">
-                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
-                        style={{ background: "hsl(var(--primary) / 0.15)", color: "hsl(var(--primary))" }}>
+                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: "hsl(var(--primary) / 0.15)", color: "hsl(var(--primary))" }}>
                         {worker.name.split(" ").map(n => n[0]).join("").slice(0, 2)}
                       </div>
                       <div className="flex-1">
@@ -422,18 +465,21 @@ export default function Index() {
                         </div>
                         <div className="text-xs mt-0.5" style={{ color: "hsl(var(--muted-foreground))" }}>выручка: {fmt(s.revenue)}</div>
                       </div>
-                      <button onClick={() => deleteWorker(worker.id)} className="opacity-30 hover:opacity-80 transition-opacity ml-2">
+                      <button onClick={() => handleDeleteWorker(worker.id)} className="opacity-30 hover:opacity-80 transition-opacity ml-2">
                         <Icon name="Trash2" size={14} style={{ color: "hsl(var(--destructive))" }} />
                       </button>
                     </div>
                     <div className="flex items-center gap-4 px-4 py-2.5 border-t" style={{ borderColor: "hsl(var(--border))", background: "hsl(var(--muted) / 0.5)" }}>
                       <span className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>Заказов: <span style={{ color: "hsl(var(--foreground))" }} className="font-medium">{s.total}</span></span>
-                      <span className={`text-xs px-2 py-0.5 rounded border status-done`}>✓ {s.done} выполнено</span>
-                      {s.active > 0 && <span className={`text-xs px-2 py-0.5 rounded border status-progress`}>⚙ {s.active} активных</span>}
+                      <span className="text-xs px-2 py-0.5 rounded border status-done">✓ {s.done} выполнено</span>
+                      {s.active > 0 && <span className="text-xs px-2 py-0.5 rounded border status-progress">⚙ {s.active} активных</span>}
                     </div>
                   </div>
                 );
               })}
+              {!loadingWorkers && workers.length === 0 && (
+                <div className="text-center py-12 text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>Рабочих пока нет</div>
+              )}
             </div>
           )}
 
@@ -459,7 +505,7 @@ export default function Index() {
                     </tr>
                   </thead>
                   <tbody>
-                    {workers.map(worker => {
+                    {loadingWorkers ? <SkeletonRows cols={4} rows={3} /> : workers.map(worker => {
                       const s = workerStats(worker.id);
                       return (
                         <tr key={worker.id} className="border-b last:border-b-0 hover:bg-white/[0.02]" style={{ borderColor: "hsl(var(--border))" }}>
@@ -540,7 +586,9 @@ export default function Index() {
               <label className="text-xs font-medium mb-1.5 block" style={{ color: "hsl(var(--muted-foreground))" }}>Описание</label>
               <Input placeholder="Краткое описание работ" value={newOrder.description} onChange={e => setNewOrder(p => ({ ...p, description: e.target.value }))} style={{ background: "hsl(var(--input))", borderColor: "hsl(var(--border))" }} />
             </div>
-            <Button onClick={submitOrder} className="w-full mt-2" style={{ background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))" }}>Создать заказ</Button>
+            <Button onClick={submitOrder} disabled={saving} className="w-full mt-2" style={{ background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))" }}>
+              {saving ? "Сохраняю..." : "Создать заказ"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -568,7 +616,9 @@ export default function Index() {
               <label className="text-xs font-medium mb-1.5 block" style={{ color: "hsl(var(--muted-foreground))" }}>Мин. остаток (предупреждение)</label>
               <Input placeholder="5" type="number" value={newPart.minStock} onChange={e => setNewPart(p => ({ ...p, minStock: e.target.value }))} style={{ background: "hsl(var(--input))", borderColor: "hsl(var(--border))" }} />
             </div>
-            <Button onClick={submitPart} className="w-full mt-2" style={{ background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))" }}>Добавить</Button>
+            <Button onClick={submitPart} disabled={saving} className="w-full mt-2" style={{ background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))" }}>
+              {saving ? "Сохраняю..." : "Добавить"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -586,7 +636,9 @@ export default function Index() {
               <label className="text-xs font-medium mb-1.5 block" style={{ color: "hsl(var(--muted-foreground))" }}>Телефон</label>
               <Input placeholder="+7 (999) 000-00-00" value={newWorker.phone} onChange={e => setNewWorker(p => ({ ...p, phone: e.target.value }))} style={{ background: "hsl(var(--input))", borderColor: "hsl(var(--border))" }} />
             </div>
-            <Button onClick={submitWorker} className="w-full mt-2" style={{ background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))" }}>Добавить рабочего</Button>
+            <Button onClick={submitWorker} disabled={saving} className="w-full mt-2" style={{ background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))" }}>
+              {saving ? "Сохраняю..." : "Добавить рабочего"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

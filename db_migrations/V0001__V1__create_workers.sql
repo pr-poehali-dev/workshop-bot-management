@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS t_p60693553_workshop_bot_managem.workers (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(200) NOT NULL,
+  phone VARCHAR(50),
+  active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT NOW()
+)

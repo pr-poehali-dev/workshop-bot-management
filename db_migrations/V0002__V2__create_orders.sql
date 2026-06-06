@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS t_p60693553_workshop_bot_managem.orders (
+  id SERIAL PRIMARY KEY,
+  title VARCHAR(500) NOT NULL,
+  worker_id INTEGER,
+  status VARCHAR(20) NOT NULL DEFAULT 'new',
+  amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+  description TEXT,
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  created_at TIMESTAMP DEFAULT NOW()
+)

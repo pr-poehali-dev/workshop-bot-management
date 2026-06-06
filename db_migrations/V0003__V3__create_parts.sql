@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS t_p60693553_workshop_bot_managem.parts (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(300) NOT NULL,
+  quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+  unit VARCHAR(50) NOT NULL DEFAULT 'шт',
+  min_stock NUMERIC(12,2) NOT NULL DEFAULT 5,
+  created_at TIMESTAMP DEFAULT NOW()
+)
