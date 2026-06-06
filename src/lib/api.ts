@@ -38,6 +38,14 @@ export async function deleteWorker(id: number): Promise<void> {
 
 // ─── Orders ───────────────────────────────────────────────────────────────────
 
+export interface OrderPart {
+  id: number;
+  partId: number;
+  partName: string;
+  quantity: number;
+  unit: string;
+}
+
 export interface Order {
   id: number;
   title: string;
@@ -47,6 +55,7 @@ export interface Order {
   amount: number;
   description: string;
   date: string;
+  parts: OrderPart[];
 }
 
 export async function fetchOrders(params?: { status?: string; date_from?: string; date_to?: string }): Promise<Order[]> {
@@ -83,6 +92,27 @@ export async function updateOrderStatus(id: number, status: string): Promise<voi
 
 export async function deleteOrder(id: number): Promise<void> {
   await fetch(`${ORDERS_URL}?id=${id}`, { method: "DELETE" });
+}
+
+export async function addPartToOrder(payload: {
+  orderId: number; partId: number; partName: string; quantity: number; unit: string;
+}): Promise<{ id: number; ok: boolean } | { error: string }> {
+  const res = await fetch(ORDERS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "add_part", ...payload }),
+  });
+  const text = await res.text();
+  const data = JSON.parse(text);
+  return typeof data === "string" ? JSON.parse(data) : data;
+}
+
+export async function removePartFromOrder(orderPartId: number): Promise<void> {
+  await fetch(ORDERS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "remove_part", orderPartId }),
+  });
 }
 
 // ─── Parts ────────────────────────────────────────────────────────────────────

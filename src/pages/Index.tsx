@@ -8,7 +8,8 @@ import {
   fetchWorkers, createWorker, deleteWorker,
   fetchOrders, createOrder, updateOrderStatus, deleteOrder,
   fetchParts, createPart, adjustPartStock, deletePart,
-  type Worker, type Order, type Part,
+  addPartToOrder, removePartFromOrder,
+  type Worker, type Order, type Part, type OrderPart,
 } from "@/lib/api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -79,6 +80,11 @@ export default function Index() {
   const [addOrderOpen, setAddOrderOpen] = useState(false);
   const [addPartOpen, setAddPartOpen] = useState(false);
   const [addWorkerOpen, setAddWorkerOpen] = useState(false);
+  const [orderDetailId, setOrderDetailId] = useState<number | null>(null);
+  const [addingPartToOrderId, setAddingPartToOrderId] = useState<number | null>(null);
+  const [addPartQty, setAddPartQty] = useState("1");
+  const [addPartSelected, setAddPartSelected] = useState("");
+  const [partError, setPartError] = useState("");
 
   const [newOrder, setNewOrder] = useState({ title: "", workerId: "", amount: "", description: "" });
   const [newPart, setNewPart] = useState({ name: "", quantity: "", unit: "шт", minStock: "" });
@@ -193,6 +199,48 @@ export default function Index() {
     const result = await adjustPartStock(id, delta);
     setParts(prev => prev.map(p => p.id === id ? { ...p, quantity: result.quantity } : p));
   };
+
+  const handleAddPartToOrder = async () => {
+    if (!addingPartToOrderId || !addPartSelected) return;
+    const part = parts.find(p => p.id === Number(addPartSelected));
+    if (!part) return;
+    const qty = Number(addPartQty) || 1;
+    setPartError("");
+    setSaving(true);
+    try {
+      const res = await addPartToOrder({
+        orderId: addingPartToOrderId,
+        partId: part.id,
+        partName: part.name,
+        quantity: qty,
+        unit: part.unit,
+      });
+      if ("error" in res) {
+        setPartError(res.error);
+        return;
+      }
+      // Обновляем заказ и склад локально
+      const newOrderPart: OrderPart = { id: res.id, partId: part.id, partName: part.name, quantity: qty, unit: part.unit };
+      setOrders(prev => prev.map(o => o.id === addingPartToOrderId
+        ? { ...o, parts: [...(o.parts || []), newOrderPart] }
+        : o
+      ));
+      setParts(prev => prev.map(p => p.id === part.id ? { ...p, quantity: p.quantity - qty } : p));
+      setAddPartSelected("");
+      setAddPartQty("1");
+    } finally { setSaving(false); }
+  };
+
+  const handleRemovePartFromOrder = async (orderId: number, orderPartId: number, partId: number, qty: number) => {
+    setOrders(prev => prev.map(o => o.id === orderId
+      ? { ...o, parts: (o.parts || []).filter(p => p.id !== orderPartId) }
+      : o
+    ));
+    setParts(prev => prev.map(p => p.id === partId ? { ...p, quantity: p.quantity + qty } : p));
+    await removePartFromOrder(orderPartId);
+  };
+
+  const orderDetail = orders.find(o => o.id === orderDetailId) ?? null;
 
   // ── Nav ───────────────────────────────────────────────────────────────────
 
@@ -347,14 +395,14 @@ export default function Index() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr style={{ borderBottom: "1px solid hsl(var(--border))", background: "hsl(var(--muted))" }}>
-                      {["Заказ", "Рабочий", "Статус", "Сумма", "Дата", ""].map((h, i) => (
+                      {["Заказ", "Рабочий", "Статус", "Сумма", "Дата", "Запчасти", ""].map((h, i) => (
                         <th key={i} className={`px-4 py-2.5 text-xs font-medium uppercase tracking-wider ${i === 3 ? "text-right" : "text-left"}`} style={{ color: "hsl(var(--muted-foreground))" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {loadingOrders ? <SkeletonRows cols={6} /> : filteredOrders.length === 0 ? (
-                      <tr><td colSpan={6} className="text-center py-12 text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>Заказы не найдены</td></tr>
+                    {loadingOrders ? <SkeletonRows cols={7} /> : filteredOrders.length === 0 ? (
+                      <tr><td colSpan={7} className="text-center py-12 text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>Заказы не найдены</td></tr>
                     ) : filteredOrders.map(order => (
                       <tr key={order.id} className="border-b last:border-b-0 hover:bg-white/[0.02] transition-colors" style={{ borderColor: "hsl(var(--border))" }}>
                         <td className="px-4 py-3">
@@ -371,6 +419,20 @@ export default function Index() {
                         </td>
                         <td className="px-4 py-3 text-right font-mono font-semibold" style={{ color: order.status === "done" ? "hsl(142 71% 45%)" : "hsl(var(--foreground))" }}>{fmt(order.amount)}</td>
                         <td className="px-4 py-3 font-mono text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>{order.date}</td>
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => { setOrderDetailId(order.id); setAddingPartToOrderId(order.id); setAddPartSelected(""); setAddPartQty("1"); setPartError(""); }}
+                            className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-all hover:opacity-80"
+                            style={{
+                              borderColor: (order.parts?.length ?? 0) > 0 ? "hsl(var(--primary) / 0.4)" : "hsl(var(--border))",
+                              color: (order.parts?.length ?? 0) > 0 ? "hsl(var(--primary))" : "hsl(var(--muted-foreground))",
+                              background: (order.parts?.length ?? 0) > 0 ? "hsl(var(--primary) / 0.08)" : "transparent",
+                            }}
+                          >
+                            <Icon name="Package" size={11} />
+                            {(order.parts?.length ?? 0) > 0 ? order.parts.length : "+"}
+                          </button>
+                        </td>
                         <td className="px-4 py-3">
                           <button onClick={() => handleDeleteOrder(order.id)} className="opacity-40 hover:opacity-100 transition-opacity">
                             <Icon name="Trash2" size={14} style={{ color: "hsl(var(--destructive))" }} />
@@ -640,6 +702,106 @@ export default function Index() {
               {saving ? "Сохраняю..." : "Добавить рабочего"}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ══ MODAL: Order Parts ══ */}
+      <Dialog open={orderDetailId !== null} onOpenChange={open => { if (!open) { setOrderDetailId(null); setAddingPartToOrderId(null); setPartError(""); } }}>
+        <DialogContent className="max-w-lg" style={{ background: "hsl(var(--card))", borderColor: "hsl(var(--border))" }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Icon name="Package" size={16} style={{ color: "hsl(var(--primary))" }} />
+              Запчасти заказа
+            </DialogTitle>
+          </DialogHeader>
+
+          {orderDetail && (
+            <div className="space-y-4 mt-1">
+              {/* Заголовок заказа */}
+              <div className="rounded-md px-3 py-2.5" style={{ background: "hsl(var(--muted))" }}>
+                <div className="text-sm font-medium">{orderDetail.title}</div>
+                <div className="text-xs mt-0.5" style={{ color: "hsl(var(--muted-foreground))" }}>
+                  {orderDetail.workerName} · {orderDetail.date}
+                </div>
+              </div>
+
+              {/* Список добавленных запчастей */}
+              <div>
+                <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: "hsl(var(--muted-foreground))" }}>
+                  Использованные запчасти
+                </div>
+                {(orderDetail.parts?.length ?? 0) === 0 ? (
+                  <div className="text-sm py-3 text-center" style={{ color: "hsl(var(--muted-foreground))" }}>
+                    Запчасти не добавлены
+                  </div>
+                ) : (
+                  <div className="rounded-md border overflow-hidden" style={{ borderColor: "hsl(var(--border))" }}>
+                    {orderDetail.parts.map((op: OrderPart) => (
+                      <div key={op.id} className="flex items-center justify-between px-3 py-2.5 border-b last:border-b-0" style={{ borderColor: "hsl(var(--border))" }}>
+                        <div>
+                          <span className="text-sm font-medium">{op.partName}</span>
+                          <span className="text-xs ml-2 font-mono" style={{ color: "hsl(var(--muted-foreground))" }}>
+                            {op.quantity} {op.unit}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => handleRemovePartFromOrder(orderDetail.id, op.id, op.partId, op.quantity)}
+                          className="opacity-40 hover:opacity-100 transition-opacity ml-3"
+                          title="Убрать запчасть (вернуть на склад)"
+                        >
+                          <Icon name="X" size={13} style={{ color: "hsl(var(--destructive))" }} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Добавить запчасть */}
+              <div className="space-y-2">
+                <div className="text-xs font-medium uppercase tracking-wider" style={{ color: "hsl(var(--muted-foreground))" }}>
+                  Добавить со склада
+                </div>
+                <div className="flex gap-2">
+                  <Select value={addPartSelected} onValueChange={v => { setAddPartSelected(v); setPartError(""); }}>
+                    <SelectTrigger className="flex-1 text-sm" style={{ background: "hsl(var(--input))", borderColor: "hsl(var(--border))" }}>
+                      <SelectValue placeholder="Выберите запчасть" />
+                    </SelectTrigger>
+                    <SelectContent style={{ background: "hsl(var(--card))", borderColor: "hsl(var(--border))" }}>
+                      {parts.filter(p => p.quantity > 0).map(p => (
+                        <SelectItem key={p.id} value={String(p.id)}>
+                          {p.name} — {p.quantity} {p.unit}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={addPartQty}
+                    onChange={e => setAddPartQty(e.target.value)}
+                    className="w-20 text-sm font-mono"
+                    style={{ background: "hsl(var(--input))", borderColor: "hsl(var(--border))" }}
+                    placeholder="кол."
+                  />
+                </div>
+                {partError && (
+                  <div className="text-xs px-2 py-1.5 rounded" style={{ color: "hsl(var(--destructive))", background: "hsl(var(--destructive) / 0.1)" }}>
+                    {partError}
+                  </div>
+                )}
+                <Button
+                  onClick={handleAddPartToOrder}
+                  disabled={saving || !addPartSelected}
+                  className="w-full"
+                  style={{ background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))" }}
+                >
+                  <Icon name="Plus" size={14} />
+                  {saving ? "Добавляю..." : "Добавить запчасть"}
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
